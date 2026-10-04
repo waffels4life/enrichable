@@ -16,35 +16,50 @@ It's still a work in progress, but it's slowly becoming something useful.
 
 ```text
 src/main/java/com/enrichable/
-│   EnrichableException.java        ← Core exception — carries errors, metadata, config and cause
+│   EnrichableException.java        ← Core exception and public API
 │   Main.java                       ← Entry point / usage examples
 │
 ├── annotation/
-│   ├── AnnotationProcessor.java    ← Reads @EnrichableHandler and @EnrichableCode via reflection
-│   ├── EnrichableCode.java         ← Annotation for custom exception classes (code + level)
-│   └── EnrichableHandler.java      ← Annotation for service classes (context + defaultLevel)
+│   ├── AnnotationProcessor.java    ← Reads Enrichable annotations via reflection
+│   ├── EnrichableCode.java         ← Annotation for custom exception classes
+│   └── EnrichableHandler.java      ← Annotation for service classes
 │
 ├── config/
 │   ├── ConsoleConfig.java          ← Controls console output formatting
-│   ├── ErrorLevel.java             ← Enum — INFO / WARNING / ERROR / CRITICAL
-│   └── LogConfig.java              ← Controls file logging behavior and formatting
+│   ├── ErrorLevel.java             ← INFO / WARNING / ERROR / CRITICAL
+│   └── LogConfig.java              ← Controls file logging behavior
 │
 ├── formatter/
-│   ├── EnrichFormatter.java        ← Interface for formatting exception output
-│   └── DefaultEnrichFormatter.java ← Default implementation of EnrichFormatter
+│   ├── EnrichFormatter.java        ← Formatting contract
+│   └── DefaultEnrichFormatter.java ← Default formatter implementation
 │
 ├── logging/
-│   └── FileEnrichLogger.java       ← Thread-safe file logger
+│   ├── EnrichLogger.java           ← Logging infrastructure contract
+│   └── FileEnrichLogger.java       ← Default thread-safe file logger
 │
 ├── model/
 │   └── EnrichInformation.java      ← Model for a single error entry
 │
 ├── registry/
-│   └── ErrorRegistry.java          ← Generates and stores unique error codes
+│   └── ErrorRegistry.java          ← Generates and stores error codes
 │
 └── validation/
     └── EnrichValidator.java        ← Validates and normalizes input values
 ```
+
+The logging package intentionally separates the logging contract from its default file-based implementation:
+
+```text
+EnrichableException
+        │
+        ▼
+  EnrichLogger
+        ▲
+        │
+FileEnrichLogger
+```
+
+This keeps the exception model independent from a specific logging destination.
 
 ---
 
@@ -56,6 +71,7 @@ src/main/java/com/enrichable/
 * Custom metadata
 * Configurable console output
 * Configurable file logging
+* Pluggable logging infrastructure
 * Optional timestamps
 * Optional error count
 * Optional metadata output
@@ -85,7 +101,7 @@ src/main/java/com/enrichable/
 Clone the repository:
 
 ```bash
-git clone https://github.com/arsam4waffels/enrichable.git
+git clone https://github.com/waffels4life/enrichable.git
 
 cd enrichable
 ```
@@ -116,55 +132,13 @@ EnrichableException exception =
 System.out.println(exception);
 ```
 
-The Builder requires:
-
-```text
-context
-message
-```
-
-The following options are optional:
-
-```text
-code
-level
-cause
-```
-
-If no error level is specified, `ErrorLevel.ERROR` is used by default.
-
-For example, a minimal exception can be created with only the required fields:
-
-```java
-EnrichableException exception =
-        new EnrichableException.Builder(
-                "DATABASE",
-                "Database connection failed"
-        )
-        .build();
-```
-
-By default, the exception output includes the available timestamp, error level, error count, and metadata information.
+The Builder requires `context` and `message`. `code`, `level`, and `cause` are optional. If no level is specified, `ErrorLevel.ERROR` is used.
 
 ---
 
 ## Builder API
 
 The Builder API provides a readable way to create `EnrichableException` instances without relying on a long constructor.
-
-```java
-EnrichableException exception =
-        new EnrichableException.Builder(
-                "DATABASE",
-                "Database connection failed"
-        )
-        .code("DB-001")
-        .level(ErrorLevel.CRITICAL)
-        .cause(new IllegalStateException("Connection refused."))
-        .build();
-```
-
-The Builder supports the following fields:
 
 | Field     | Required | Default |
 | --------- | -------- | ------- |
@@ -176,26 +150,11 @@ The Builder supports the following fields:
 
 Each Builder method returns the same Builder instance, allowing method chaining.
 
-For example:
-
-```java
-EnrichableException exception =
-        new EnrichableException.Builder(
-                "PAYMENT",
-                "Payment processing failed"
-        )
-        .code("PAY-001")
-        .level(ErrorLevel.ERROR)
-        .build();
-```
-
 ---
 
 ## Adding Information
 
-Sometimes one error isn't enough.
-
-You can attach additional information to the same exception:
+Sometimes one error isn't enough. You can attach additional information to the same exception:
 
 ```java
 exception.addInformation(
@@ -206,28 +165,25 @@ exception.addInformation(
 );
 ```
 
-This can be useful when several related things go wrong during the same operation.
-
 Each `EnrichInformation` entry keeps its own context, code, message, level, timestamp, and metadata.
 
 ---
 
 ## Metadata
 
-You can attach extra key-value information to the latest error entry:
+Metadata belongs to a specific `EnrichInformation` entry.
+
+The older `EnrichableException.addMetadata(...)` convenience method is deprecated. The preferred API is to add metadata directly to the relevant `EnrichInformation` instance:
 
 ```java
-exception
-        .addMetadata("userId", "1042")
-        .addMetadata("query", "SELECT * FROM users")
-        .addMetadata("retryCount", "3");
+exception.getInformationList()
+        .getLast()
+        .addMetadata("userId", "1042");
 ```
 
-Metadata belongs to the specific error information it was added to.
+This makes the ownership of metadata explicit and avoids coupling metadata operations to the exception's internal "latest entry" state.
 
-For example, if an exception contains multiple error entries, metadata added after one entry does not leak into the others.
-
-Whether metadata appears in the console output is controlled by `ConsoleConfig`.
+Whether metadata appears in console output is controlled by `ConsoleConfig`.
 
 ```java
 exception.setConsoleConfig(
@@ -253,8 +209,6 @@ ConsoleConfig configuration =
 exception.setConsoleConfig(configuration);
 ```
 
-Currently available options:
-
 | Option           | What it does                           | Default |
 | ---------------- | -------------------------------------- | ------- |
 | `showTimestamp`  | Shows timestamps for error information | `true`  |
@@ -262,19 +216,17 @@ Currently available options:
 | `showErrorCount` | Shows the total number of errors       | `true`  |
 | `showMetadata`   | Shows metadata attached to errors      | `true`  |
 
-The console output is intentionally detailed by default.
-
 ---
 
 ## Logging
 
-Sometimes printing an exception to the console isn't enough.
-
-`EnrichableException` can write a formatted exception report to a file using:
+`EnrichableException` writes reports through the `EnrichLogger` infrastructure contract:
 
 ```java
 exception.writeLog();
 ```
+
+The default logger is `FileEnrichLogger`, so existing applications still get file-based logging without additional configuration.
 
 By default, the log file is:
 
@@ -282,32 +234,30 @@ By default, the log file is:
 enrichable.log
 ```
 
-The generated report keeps each error and its metadata together, so things don't turn into a wall of random error messages.
+File logging is thread-safe, so concurrent exceptions can safely write to the shared log file without interleaving their reports.
 
-Example:
+### Custom Logger
 
-```text
-════════════════════════════════════════════════════
-  ENRICHABLE EXCEPTION REPORT
-  Total Errors : 2
-  Thrown At    : 2026-08-27 11:58:37
-════════════════════════════════════════════════════
+The logging implementation can be replaced when an application needs another destination or format.
 
-  [ERROR-1] [CRITICAL] [DATABASE:DB-001]
-  Failed to execute query: table 'users' not found
-    └─ Time : 2026-08-27T11:58:37
-    └─ retryCount : 3
-    └─ query : SELECT * FROM users
-    └─ userId : 1042
+```java
+exception.setLogger((information, thrownAt, config) -> {
+    System.out.println("Custom logger received " + information.size() + " entries");
+    return null;
+});
 
-  [ERROR-2] [WARNING] [DATABASE-SIZE:DB-002]
-  Failed to execute query: table 'users-info' not found
-    └─ Time : 2026-08-27T11:58:37
+exception.writeLog();
 ```
 
-Each call to `writeLog()` writes another report to the configured log file.
+`EnrichLogger` is a functional interface, so lambdas are supported. This extension point can be used for custom console logging, JSON output, database persistence, remote logging, or test doubles without changing `EnrichableException` itself.
 
-File logging is thread-safe, so concurrent exceptions can safely write to the shared log file without interleaving their reports.
+The dependency direction is intentionally:
+
+```text
+EnrichableException → EnrichLogger ← FileEnrichLogger
+```
+
+`EnrichableException` depends on the contract, while `FileEnrichLogger` provides the default infrastructure implementation.
 
 ---
 
@@ -327,7 +277,7 @@ exception.setLogConfig(logConfig);
 exception.writeLog();
 ```
 
-`LogConfig` currently provides the following options:
+`LogConfig` currently provides:
 
 | Option             | What it does                            | Default                   |
 |--------------------|-----------------------------------------|---------------------------|
@@ -336,36 +286,16 @@ exception.writeLog();
 | `showMetadata`     | Shows metadata                          | `true`                    |
 | `filePath`         | Changes the log file path               | `enrichable.log`          |
 | `clearBeforeWrite` | Clears the existing file before writing | `false`                   |
-| `generateCode`     | Generate a unique code for each session | `false`                   |
-| `clearBeforeWrite` | Change the registery file path          | `enrichable-registry.log` |
+| `generateCode`     | Generates a unique error code           | `false`                   |
+| `registryPath`     | Changes the registry file path           | `enrichable-registry.log` |
 
 Console and logging configuration are independent.
-
-For example:
-
-```java
-exception.setConsoleConfig(
-        new ConsoleConfig()
-                .showMetadata(false)
-);
-
-exception.setLogConfig(
-        new LogConfig()
-                .showMetadata(true)
-);
-```
-
-This hides metadata from console output while keeping it in the log file.
 
 ---
 
 ## Error Code Registry
 
-Sometimes you need more than a log file.
-
-When `generateCode` is enabled, each call to `writeLog()` generates a unique
-6-character code for that exception session and stores the full report in a
-separate registry file.
+When `generateCode` is enabled, each call to `writeLog()` generates a 6-character code for that exception session and stores the full report in a separate registry file.
 
 ```java
 exception.setLogConfig(
@@ -377,20 +307,13 @@ String code = exception.writeLog();
 System.out.println("Error code: " + code); // af45cb
 ```
 
-The code is derived from the exception content and timestamp using SHA-256,
-so each run produces a unique code even when the errors are identical.
-
----
-
-### Registry File
-
-By default, the registry is written to:
+The registry file defaults to:
 
 ```text
 enrichable-registry.log
 ```
 
-You can change this with `registryPath()`:
+It can be changed with `registryPath()`:
 
 ```java
 exception.setLogConfig(
@@ -400,35 +323,9 @@ exception.setLogConfig(
 );
 ```
 
----
-
-### Registry File Structure
-
-Each entry in the registry starts with a `[CODE: xxxxxx]` marker followed
-by the full exception report:
-
-```text
-[CODE: af45cb]
-════════════════════════════════════════════════════
-  ENRICHABLE EXCEPTION REPORT
-  Total Errors : 3
-  Thrown At    : 2026-09-06 14:23:01
-════════════════════════════════════════════════════
-
-  [ERROR-1] [CRITICAL] [DATABASE:DB-001]
-  Connection failed
-    └─ Time : 2026-09-06 14:23:01
-
-[CODE: 3d9f12]
-════════════════════════════════════════════════════
-...
-```
-
----
-
 ### Lookup
 
-You can retrieve any previously logged report by its code:
+You can retrieve a previously logged report by its code:
 
 ```java
 LogConfig config = new LogConfig()
@@ -439,23 +336,13 @@ ErrorRegistry.getInstance()
         .ifPresent(System.out::println);
 ```
 
-`lookup()` returns an `Optional<String>` — empty if the code does not exist
-or the registry file cannot be read.
-
----
+`lookup()` returns an `Optional<String>` — empty if the code does not exist or the registry file cannot be read.
 
 ### How Codes Are Generated
 
-Each code is the first 6 characters of a SHA-256 hash computed from:
+Each code is the first 6 characters of a SHA-256 hash computed from the exception content and timestamp. The timestamp makes identical exception runs produce different codes in normal operation.
 
-* The content of all error entries (context, code, message, level)
-* The exception timestamp
-
-The timestamp is included so that two runs with identical errors still produce
-different codes. 6 hex characters yield ~16 million possible values, which is
-sufficient for a local error registry.
-
-This is a readability feature, not a security guarantee.
+This is a readability and lookup feature, not a security guarantee.
 
 ---
 
@@ -464,8 +351,6 @@ This is a readability feature, not a security guarantee.
 `LogConfig` can filter which errors are written to the log file.
 
 ### `onlyLevel()`
-
-Use `onlyLevel()` when you want to log only one specific error level:
 
 ```java
 exception.setLogConfig(
@@ -476,19 +361,9 @@ exception.setLogConfig(
 exception.writeLog();
 ```
 
-For example, with:
-
-```java
-.onlyLevel(ErrorLevel.ERROR)
-```
-
-only `ERROR` entries are written to the log.
-
----
+Only entries matching the selected level are written.
 
 ### `minimumLevel()`
-
-Use `minimumLevel()` when you want to log a level and everything more severe than it.
 
 ```java
 exception.setLogConfig(
@@ -499,29 +374,13 @@ exception.setLogConfig(
 exception.writeLog();
 ```
 
-With the current error-level ordering:
+With the current ordering:
 
 ```text
-INFO
-WARNING
-ERROR
-CRITICAL
+INFO < WARNING < ERROR < CRITICAL
 ```
 
-the configuration:
-
-```java
-.minimumLevel(ErrorLevel.ERROR)
-```
-
-logs:
-
-```text
-ERROR      ✓
-CRITICAL   ✓
-WARNING    ✗
-INFO       ✗
-```
+`minimumLevel(ErrorLevel.ERROR)` logs `ERROR` and `CRITICAL` entries while excluding `WARNING` and `INFO`.
 
 `onlyLevel()` and `minimumLevel()` are mutually exclusive. Setting one clears the other.
 
@@ -529,7 +388,7 @@ INFO       ✗
 
 ## Custom Log File
 
-You can change the destination of the log file:
+You can change the destination of the default file logger:
 
 ```java
 exception.setLogConfig(
@@ -540,20 +399,11 @@ exception.setLogConfig(
 exception.writeLog();
 ```
 
-This allows different applications or environments to use their own log file names.
-
 ---
 
 ## Clearing Previous Logs
 
-By default, writing to a log file appends the new report:
-
-```java
-new LogConfig()
-        .clearBeforeWrite(false);
-```
-
-If you want the existing file to be cleared before writing:
+By default, writing to a log file appends the new report. To replace the existing file before writing:
 
 ```java
 exception.setLogConfig(
@@ -563,8 +413,6 @@ exception.setLogConfig(
 
 exception.writeLog();
 ```
-
-This is useful when a fresh report is preferred instead of an accumulated log file.
 
 ---
 
@@ -579,24 +427,7 @@ ErrorLevel.ERROR
 ErrorLevel.CRITICAL
 ```
 
-For example:
-
-```java
-EnrichableException exception =
-        new EnrichableException.Builder(
-                "PAYMENT",
-                "Payment processing failed"
-        )
-        .code("PAY-001")
-        .level(ErrorLevel.ERROR)
-        .build();
-```
-
-If no level is explicitly specified, the Builder uses:
-
-```java
-ErrorLevel.ERROR
-```
+If no level is explicitly specified, the Builder uses `ErrorLevel.ERROR`.
 
 ---
 
@@ -619,11 +450,7 @@ EnrichableException exception =
         .build();
 ```
 
-The original cause is preserved and can still be retrieved normally:
-
-```java
-exception.getCause();
-```
+The original cause is preserved and can still be retrieved normally with `exception.getCause()`.
 
 ---
 
@@ -661,54 +488,19 @@ public class DatabaseConnectionException
         extends EnrichableException {
     // ...
 }
-
-throw AnnotationProcessor.processCode(
-        DatabaseConnectionException.class,
-        "Database",
-        "Connection failed"
-);
 ```
 
-The annotated values are picked up automatically.
+The annotated values are picked up automatically by `AnnotationProcessor`.
 
 ---
 
 ## Validation
 
-The library performs basic validation so invalid information doesn't quietly make its way into an exception.
+The library performs input validation so invalid information does not silently make its way into an exception.
 
-Required text values such as `context` and `message` cannot be `null` or blank.
+Required text values such as `context` and `message` cannot be `null` or blank. The optional `code`, when provided, also cannot be blank.
 
-The optional `code`, when provided, also cannot be blank.
-
-Metadata also has a few rules:
-
-* `null` keys and values are rejected.
-* Blank keys and values are normalized to `BLANK`.
-
-For example:
-
-```java
-exception.addMetadata("", "user-6969");
-```
-
-becomes:
-
-```text
-[BLANK=user-6969]
-```
-
-And:
-
-```java
-exception.addMetadata("userId", "");
-```
-
-becomes:
-
-```text
-[userId=BLANK]
-```
+Metadata is validated and normalized by `EnrichValidator` when added through the `EnrichInformation` API.
 
 Configuration values are also validated. For example, null error levels and invalid log file paths are rejected.
 
@@ -724,37 +516,13 @@ Run all tests with:
 mvn test
 ```
 
-The current test suite covers:
-
-* Builder API
-* Builder defaults and optional fields
-* Adding information
-* Input validation
-* Metadata
-* Console configuration
-* Log configuration
-* Exception causes
-* Multiple error information
-* Output behavior
-* File logging
-* Log-level filtering
-* Custom log file paths
-* Clearing previous logs
-* Thread-safe file logging
-* Concurrent exception building
-* Concurrent metadata writing
-* Simultaneous read and write operations
-* Concurrent file logging
-* Error code generation
-* Registry file writing
-* Registry lookup by code
-* Registry path configuration
+The test suite covers the Builder API, validation, metadata, console configuration, logging configuration, exception causes, multiple error entries, output behavior, file logging, log-level filtering, registry behavior, concurrency, and the pluggable `EnrichLogger` contract.
 
 ---
 
 ## Example
 
-Here's a more complete example:
+Here's a more complete example using the default file logger:
 
 ```java
 EnrichableException databaseError =
@@ -769,9 +537,16 @@ EnrichableException databaseError =
         ))
         .build();
 
-databaseError
-        .addMetadata("userId", "1042")
-        .addMetadata("query", "SELECT * FROM users")
+databaseError.getInformationList()
+        .getLast()
+        .addMetadata("userId", "1042");
+
+databaseError.getInformationList()
+        .getLast()
+        .addMetadata("query", "SELECT * FROM users");
+
+databaseError.getInformationList()
+        .getLast()
         .addMetadata("retryCount", "3");
 
 databaseError.setConsoleConfig(
@@ -792,7 +567,6 @@ databaseError.setLogConfig(
 );
 
 System.out.println(databaseError);
-
 databaseError.writeLog();
 ```
 
@@ -810,9 +584,7 @@ exception
         .writeLog();
 ```
 
-is still supported, but `onlyLog()` is deprecated.
-
-The recommended API is now:
+is still supported, but `onlyLog()` is deprecated. The recommended API is:
 
 ```java
 exception.setLogConfig(
@@ -823,11 +595,9 @@ exception.setLogConfig(
 exception.writeLog();
 ```
 
-Similarly, the older metadata API remains available while the library evolves.
+Similarly, `EnrichableException.addMetadata(...)` remains available for compatibility but is deprecated. New code should add metadata directly to the relevant `EnrichInformation` entry.
 
-The Builder API is now the recommended way to create new `EnrichableException` instances because it provides a more readable alternative to the previous long constructor.
-
-Older construction APIs may remain available for compatibility while the library evolves.
+The Builder API is the recommended way to create new `EnrichableException` instances.
 
 ---
 
@@ -835,35 +605,27 @@ Older construction APIs may remain available for compatibility while the library
 
 Java already provides `Throwable.addSuppressed()` for attaching additional exceptions to a throwable. That's useful, but it solves a different problem.
 
-| Feature                                 | `Throwable.addSuppressed()`      | `EnrichableException`            |
-|-----------------------------------------| -------------------------------- | -------------------------------- |
-| Attach another `Throwable`              | Yes                              | Yes, through the exception cause |
-| Add structured error information        | No                               | Yes                              |
-| Error context                           | No                               | Yes                              |
-| Error code                              | No                               | Yes                              |
-| Error level                             | No                               | Yes                              |
-| Timestamp per error                     | No                               | Yes                              |
-| Custom metadata                         | No                               | Yes                              |
-| Multiple related error entries          | Limited to suppressed exceptions | Yes                              |
-| Configurable output                     | No                               | Yes                              |
-| Formatted error report                  | No                               | Yes                              |
-| Designed for structured error reporting | No                               | Yes                              |
-| Annotation-based exception creation     | No                               | Yes                              |
-| Unique error code per session           | No                               | Yes                              |
-| Error code registry with lookup         | No                               | Yes                              |
+| Feature                                 | `Throwable.addSuppressed()`       | `EnrichableException`            |
+|-----------------------------------------|-----------------------------------|----------------------------------|
+| Attach another `Throwable`              | Yes                               | Yes, through the exception cause |
+| Add structured error information        | No                                | Yes                              |
+| Error context                           | No                                | Yes                              |
+| Error code                              | No                                | Yes                              |
+| Error level                             | No                                | Yes                              |
+| Timestamp per error                     | No                                | Yes                              |
+| Custom metadata                         | No                                | Yes                              |
+| Multiple related error entries          | Limited to suppressed exceptions  | Yes                              |
+| Configurable output                     | No                                | Yes                              |
+| Formatted error report                  | No                                | Yes                              |
+| Designed for structured error reporting | No                                | Yes                              |
+| Annotation-based exception creation     | No                                | Yes                              |
+| Unique error code per session           | No                                | Yes                              |
+| Error code registry with lookup         | No                                | Yes                              |
+| Pluggable logging                       | No                                | Yes                              |
 
 `addSuppressed()` is mainly useful when one operation encounters additional exceptions that should not replace the original exception.
 
 `EnrichableException` is designed for a different job: **making errors carry structured, human-readable context that can be logged and inspected later.**
-
-So this isn't really:
-
-> "Java's way vs. our way."
-
-It's more like:
-
-> `addSuppressed()` tells you what other exceptions happened.
-> `EnrichableException` tells you what happened, where, why, how severe it was, and gives you extra context to investigate it.
 
 ---
 
